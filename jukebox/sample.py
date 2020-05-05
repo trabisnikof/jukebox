@@ -81,8 +81,15 @@ def sample_level(zs, labels, sampling_kwargs, level, prior, total_length, hop_le
     print_once(f"Sampling level {level}")
     if total_length >= prior.n_ctx:
         for start in get_starts(total_length, prior.n_ctx, hop_length):
-            print(f"start {start}")
+            if start <= hps.restart:
+                print(f"Skipping: {start}")
+                continue
+            hps.restart = start
             zs = sample_single_window(zs, labels, sampling_kwargs, level, prior, start, hps)
+            logdir = f"{hps.name}/level_{level}"
+            if not os.path.exists(logdir):
+                os.makedirs(logdir)
+            t.save(dict(zs=zs, labels=labels, sampling_kwargs=sampling_kwargs, x=None,level=level), f"{logdir}/data_part.pth.tar")
     else:
         zs = sample_partial_window(zs, labels, sampling_kwargs, level, prior, total_length, hps)
     return zs
@@ -99,8 +106,11 @@ def _sample(zs, labels, sampling_kwargs, priors, sample_levels, hps):
         assert hps.sample_length % prior.raw_to_tokens == 0, f"Expected sample_length {hps.sample_length} to be multiple of {prior.raw_to_tokens}"
         total_length = hps.sample_length//prior.raw_to_tokens
         hop_length = int(hps.hop_fraction[level]*prior.n_ctx)
+        if hps.restart_level < level:
+            print(f"Skipping: {level}")
+            continue
         zs = sample_level(zs, labels[level], sampling_kwargs[level], level, prior, total_length, hop_length, hps)
-
+        hps.restart_level = level - 1
         prior.cpu()
         empty_cache()
 
@@ -110,7 +120,7 @@ def _sample(zs, labels, sampling_kwargs, priors, sample_levels, hps):
         logdir = f"{hps.name}/level_{level}"
         if not os.path.exists(logdir):
             os.makedirs(logdir)
-        t.save(dict(zs=zs, labels=labels, sampling_kwargs=sampling_kwargs, x=x), f"{logdir}/data.pth.tar")
+        t.save(dict(zs=zs, labels=labels, sampling_kwargs=sampling_kwargs, x=x,level=level), f"{logdir}/data.pth.tar")
         save_wav(logdir, x, hps.sr)
         if alignments is None and priors[-1] is not None and priors[-1].n_tokens > 0:
             alignments = get_alignment(x, zs, labels[-1], priors[-1], sampling_kwargs[-1]['fp16'], hps)
